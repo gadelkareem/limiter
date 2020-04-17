@@ -1,4 +1,4 @@
-package limiter
+package limiter_test
 
 import (
 	"reflect"
@@ -6,13 +6,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ulule/limiter/v3"
 )
 
 // TestRate tests Rate methods.
 func TestRate(t *testing.T) {
 	is := require.New(t)
 
-	expected := map[string]Rate{
+	expected := map[string]limiter.Rate{
 		"10-S": {
 			Formatted: "10-S",
 			Period:    1 * time.Second,
@@ -28,10 +30,15 @@ func TestRate(t *testing.T) {
 			Period:    1 * time.Hour,
 			Limit:     int64(3),
 		},
+		"2000-D": {
+			Formatted: "2000-D",
+			Period:    24 * time.Hour,
+			Limit:     int64(2000),
+		},
 	}
 
 	for k, v := range expected {
-		r, err := NewRateFromFormatted(k)
+		r, err := limiter.NewRateFromFormatted(k)
 		is.NoError(err)
 		is.True(reflect.DeepEqual(v, r))
 	}
@@ -45,7 +52,7 @@ func TestRate(t *testing.T) {
 	}
 
 	for _, w := range wrongs {
-		_, err := NewRateFromFormatted(w)
+		_, err := limiter.NewRateFromFormatted(w)
 		is.Error(err)
 	}
 

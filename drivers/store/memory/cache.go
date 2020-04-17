@@ -78,7 +78,7 @@ func NewCache(cleanInterval time.Duration) *CacheWrapper {
 		counters: map[string]Counter{},
 	}
 
-	wrapper := &CacheWrapper{cache}
+	wrapper := &CacheWrapper{Cache: cache}
 
 	if cleanInterval > 0 {
 		startCleaner(cache, cleanInterval)
@@ -146,4 +146,14 @@ func (cache *Cache) Clean() {
 		}
 	}
 	cache.mutex.Unlock()
+}
+
+// Reset changes the key's value and resets the expiration.
+func (cache *Cache) Reset(key string, duration time.Duration) (int64, time.Time) {
+	cache.mutex.Lock()
+	delete(cache.counters, key)
+	cache.mutex.Unlock()
+
+	expiration := time.Now().Add(duration).UnixNano()
+	return 0, time.Unix(0, expiration)
 }

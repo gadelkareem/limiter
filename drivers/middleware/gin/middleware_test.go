@@ -11,9 +11,9 @@ import (
 	libgin "github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ulule/limiter"
-	"github.com/ulule/limiter/drivers/middleware/gin"
-	"github.com/ulule/limiter/drivers/store/memory"
+	"github.com/ulule/limiter/v3"
+	"github.com/ulule/limiter/v3/drivers/middleware/gin"
+	"github.com/ulule/limiter/v3/drivers/store/memory"
 )
 
 func TestHTTPMiddleware(t *testing.T) {
@@ -103,13 +103,13 @@ func TestHTTPMiddleware(t *testing.T) {
 	store = memory.NewStore()
 	is.NotZero(store)
 
-	j := 0
-	KeyGetter := func(c *libgin.Context) string {
-		j += 1
-		return strconv.Itoa(j)
+	counter = int64(0)
+	keyGetter := func(c *libgin.Context) string {
+		v := atomic.AddInt64(&counter, 1)
+		return strconv.FormatInt(v, 10)
 	}
-	middleware = gin.NewMiddleware(limiter.New(store, rate), gin.WithKeyGetter(KeyGetter))
 
+	middleware = gin.NewMiddleware(limiter.New(store, rate), gin.WithKeyGetter(keyGetter))
 	is.NotZero(middleware)
 
 	router = libgin.New()
@@ -122,7 +122,40 @@ func TestHTTPMiddleware(t *testing.T) {
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, request)
 		// We should always be ok as the key changes for each request
-		is.Equal(http.StatusOK, resp.Code, strconv.Itoa(int(i)))
+		is.Equal(http.StatusOK, resp.Code, strconv.FormatInt(i, 10))
 	}
 
+	//
+	// Test ExcludedKey
+	//
+	store = memory.NewStore()
+	is.NotZero(store)
+	counter = int64(0)
+	excludedKeyFn := func(key string) bool {
+		return key == "1"
+	}
+	middleware = gin.NewMiddleware(limiter.New(store, rate),
+		gin.WithKeyGetter(func(c *libgin.Context) string {
+			v := atomic.AddInt64(&counter, 1)
+			return strconv.FormatInt(v%2, 10)
+		}),
+		gin.WithExcludedKey(excludedKeyFn),
+	)
+	is.NotZero(middleware)
+
+	router = libgin.New()
+	router.Use(middleware)
+	router.GET("/", func(c *libgin.Context) {
+		c.String(http.StatusOK, "hello")
+	})
+	success = 20
+	for i := int64(1); i < clients; i++ {
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, request)
+		if i <= success || i%2 == 1 {
+			is.Equal(http.StatusOK, resp.Code, strconv.FormatInt(i, 10))
+		} else {
+			is.Equal(resp.Code, http.StatusTooManyRequests)
+		}
+	}
 }

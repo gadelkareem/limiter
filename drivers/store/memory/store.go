@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ulule/limiter"
-	"github.com/ulule/limiter/drivers/store/common"
+	"github.com/ulule/limiter/v3"
+	"github.com/ulule/limiter/v3/drivers/store/common"
 )
 
 // Store is the in-memory store.
@@ -50,6 +50,17 @@ func (store *Store) Peek(ctx context.Context, key string, rate limiter.Rate) (li
 	now := time.Now()
 
 	count, expiration := store.cache.Get(key, rate.Period)
+
+	lctx := common.GetContextFromState(now, rate, expiration, count)
+	return lctx, nil
+}
+
+// Reset returns the limit for given identifier.
+func (store *Store) Reset(ctx context.Context, key string, rate limiter.Rate) (limiter.Context, error) {
+	key = fmt.Sprintf("%s:%s", store.Prefix, key)
+	now := time.Now()
+
+	count, expiration := store.cache.Reset(key, rate.Period)
 
 	lctx := common.GetContextFromState(now, rate, expiration, count)
 	return lctx, nil

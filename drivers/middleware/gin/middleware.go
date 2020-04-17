@@ -5,24 +5,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ulule/limiter"
+	"github.com/ulule/limiter/v3"
 )
 
-// Middleware is the middleware for basic http.Handler.
+// Middleware is the middleware for gin.
 type Middleware struct {
 	Limiter        *limiter.Limiter
 	OnError        ErrorHandler
 	OnLimitReached LimitReachedHandler
 	KeyGetter      KeyGetter
+	ExcludedKey    func(string) bool
 }
 
-// NewMiddleware return a new instance of a basic HTTP middleware.
+// NewMiddleware return a new instance of a gin middleware.
 func NewMiddleware(limiter *limiter.Limiter, options ...Option) gin.HandlerFunc {
 	middleware := &Middleware{
 		Limiter:        limiter,
 		OnError:        DefaultErrorHandler,
 		OnLimitReached: DefaultLimitReachedHandler,
 		KeyGetter:      DefaultKeyGetter,
+		ExcludedKey:    nil,
 	}
 
 	for _, option := range options {
@@ -37,6 +39,11 @@ func NewMiddleware(limiter *limiter.Limiter, options ...Option) gin.HandlerFunc 
 // Handle gin request.
 func (middleware *Middleware) Handle(c *gin.Context) {
 	key := middleware.KeyGetter(c)
+	if middleware.ExcludedKey != nil && middleware.ExcludedKey(key) {
+		c.Next()
+		return
+	}
+
 	context, err := middleware.Limiter.Get(c, key)
 	if err != nil {
 		middleware.OnError(c, err)

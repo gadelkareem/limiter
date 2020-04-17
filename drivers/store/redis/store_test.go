@@ -3,13 +3,14 @@ package redis_test
 import (
 	"os"
 	"testing"
+	"time"
 
-	libredis "github.com/go-redis/redis"
+	libredis "github.com/go-redis/redis/v7"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ulule/limiter"
-	"github.com/ulule/limiter/drivers/store/common"
-	"github.com/ulule/limiter/drivers/store/redis"
+	"github.com/ulule/limiter/v3"
+	"github.com/ulule/limiter/v3/drivers/store/redis"
+	"github.com/ulule/limiter/v3/drivers/store/tests"
 )
 
 func TestRedisStoreSequentialAccess(t *testing.T) {
@@ -26,7 +27,7 @@ func TestRedisStoreSequentialAccess(t *testing.T) {
 	is.NoError(err)
 	is.NotNil(store)
 
-	common.TestStoreSequentialAccess(t, store)
+	tests.TestStoreSequentialAccess(t, store)
 }
 
 func TestRedisStoreConcurrentAccess(t *testing.T) {
@@ -43,7 +44,52 @@ func TestRedisStoreConcurrentAccess(t *testing.T) {
 	is.NoError(err)
 	is.NotNil(store)
 
-	common.TestStoreConcurrentAccess(t, store)
+	tests.TestStoreConcurrentAccess(t, store)
+}
+
+func TestRedisClientExpiration(t *testing.T) {
+	is := require.New(t)
+
+	client, err := newRedisClient()
+	is.NoError(err)
+	is.NotNil(client)
+
+	key := "foobar"
+	value := 642
+	keyNoExpiration := -1 * time.Nanosecond
+	keyNotExist := -2 * time.Nanosecond
+
+	delCmd := client.Del(key)
+	_, err = delCmd.Result()
+	is.NoError(err)
+
+	expCmd := client.PTTL(key)
+	ttl, err := expCmd.Result()
+	is.NoError(err)
+	is.Equal(keyNotExist, ttl)
+
+	setCmd := client.Set(key, value, 0)
+	_, err = setCmd.Result()
+	is.NoError(err)
+
+	expCmd = client.PTTL(key)
+	ttl, err = expCmd.Result()
+	is.NoError(err)
+	is.Equal(keyNoExpiration, ttl)
+
+	setCmd = client.Set(key, value, time.Second)
+	_, err = setCmd.Result()
+	is.NoError(err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	expCmd = client.PTTL(key)
+	ttl, err = expCmd.Result()
+	is.NoError(err)
+
+	expected := int64(0)
+	actual := int64(ttl)
+	is.Greater(actual, expected)
 }
 
 func newRedisClient() (*libredis.Client, error) {

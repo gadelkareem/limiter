@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ulule/limiter/drivers/store/memory"
+	"github.com/ulule/limiter/v3/drivers/store/memory"
 )
 
 func TestCacheIncrementSequential(t *testing.T) {
@@ -38,7 +38,7 @@ func TestCacheIncrementSequential(t *testing.T) {
 func TestCacheIncrementConcurrent(t *testing.T) {
 	is := require.New(t)
 
-	goroutines := 500
+	goroutines := 300
 	ops := 500
 
 	expected := int64(0)
@@ -59,7 +59,7 @@ func TestCacheIncrementConcurrent(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			if (i % 3) == 0 {
-				time.Sleep(2 * time.Second)
+				time.Sleep(1 * time.Second)
 				for j := 0; j < ops; j++ {
 					cache.Increment(key, int64(i+j), (1 * time.Second))
 				}
@@ -92,5 +92,38 @@ func TestCacheGet(t *testing.T) {
 	x, expire := cache.Get(key, duration)
 	is.Equal(int64(0), x)
 	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+}
 
+func TestCacheReset(t *testing.T) {
+	is := require.New(t)
+
+	key := "foobar"
+	cache := memory.NewCache(10 * time.Nanosecond)
+	duration := 50 * time.Millisecond
+	deleted := time.Now().Add(duration).UnixNano()
+	epsilon := 0.001
+
+	x, expire := cache.Get(key, duration)
+	is.Equal(int64(0), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+
+	x, expire = cache.Increment(key, 1, duration)
+	is.Equal(int64(1), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+
+	x, expire = cache.Increment(key, 1, duration)
+	is.Equal(int64(2), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+
+	x, expire = cache.Reset(key, duration)
+	is.Equal(int64(0), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+
+	x, expire = cache.Increment(key, 1, duration)
+	is.Equal(int64(1), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
+
+	x, expire = cache.Increment(key, 1, duration)
+	is.Equal(int64(2), x)
+	is.InEpsilon(deleted, expire.UnixNano(), epsilon)
 }

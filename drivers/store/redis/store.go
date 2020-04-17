@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	libredis "github.com/go-redis/redis"
+	libredis "github.com/go-redis/redis/v7"
 	"github.com/pkg/errors"
 
-	"github.com/ulule/limiter"
-	"github.com/ulule/limiter/drivers/store/common"
+	"github.com/ulule/limiter/v3"
+	"github.com/ulule/limiter/v3/drivers/store/common"
 )
 
 // Client is an interface thats allows to use a redis cluster or a redis single client seamlessly.
@@ -38,6 +38,7 @@ func NewStore(client Client) (limiter.Store, error) {
 	return NewStoreWithOptions(client, limiter.StoreOptions{
 		Prefix:          limiter.DefaultPrefix,
 		CleanUpInterval: limiter.DefaultCleanUpInterval,
+		MaxRetry:        limiter.DefaultMaxRetry,
 	})
 }
 
@@ -133,6 +134,35 @@ func (store *Store) Peek(ctx context.Context, key string, rate limiter.Rate) (li
 	return lctx, nil
 }
 
+// Reset returns the limit for given identifier which is set to zero.
+func (store *Store) Reset(ctx context.Context, key string, rate limiter.Rate) (limiter.Context, error) {
+	key = fmt.Sprintf("%s:%s", store.Prefix, key)
+	now := time.Now()
+
+	lctx := limiter.Context{}
+	onWatch := func(rtx *libredis.Tx) error {
+
+		err := store.doResetValue(rtx, key)
+		if err != nil {
+			return err
+		}
+
+		count := int64(0)
+		expiration := now.Add(rate.Period)
+
+		lctx = common.GetContextFromState(now, rate, expiration, count)
+		return nil
+	}
+
+	err := store.client.Watch(onWatch, key)
+	if err != nil {
+		err = errors.Wrapf(err, "limiter: cannot reset value for %s", key)
+		return limiter.Context{}, err
+	}
+
+	return lctx, nil
+}
+
 // doPeekValue will execute peekValue with a retry mecanism (optimistic locking) until store.MaxRetry is reached.
 func (store *Store) doPeekValue(rtx *libredis.Tx, key string) (int64, time.Duration, error) {
 	for i := 0; i < store.MaxRetry; i++ {
@@ -146,7 +176,7 @@ func (store *Store) doPeekValue(rtx *libredis.Tx, key string) (int64, time.Durat
 
 // peekValue will retrieve the counter and its expiration for given key.
 func peekValue(rtx *libredis.Tx, key string) (int64, time.Duration, error) {
-	pipe := rtx.Pipeline()
+	pipe := rtx.TxPipeline()
 	value := pipe.Get(key)
 	expire := pipe.PTTL(key)
 
@@ -210,7 +240,7 @@ func (store *Store) doUpdateValue(rtx *libredis.Tx, key string,
 
 // updateValue will try to increment the counter identified by given key.
 func updateValue(rtx *libredis.Tx, key string, expiration time.Duration) (int64, time.Duration, error) {
-	pipe := rtx.Pipeline()
+	pipe := rtx.TxPipeline()
 	value := pipe.Incr(key)
 	expire := pipe.PTTL(key)
 
@@ -229,8 +259,10 @@ func updateValue(rtx *libredis.Tx, key string, expiration time.Duration) (int64,
 		return 0, 0, err
 	}
 
-	// If ttl is negative, we have to define key expiration.
-	if ttl < 0 {
+	// If ttl is less than zero, we have to define key expiration.
+	// The PTTL command returns -2 if the key does not exist, and -1 if the key exists, but there is no expiry set.
+	// We shouldn't try to set an expiry on a key that doesn't exist.
+	if isExpirationRequired(ttl) {
 		expire := rtx.Expire(key, expiration)
 
 		ok, err := expire.Result()
@@ -244,7 +276,29 @@ func updateValue(rtx *libredis.Tx, key string, expiration time.Duration) (int64,
 	}
 
 	return count, ttl, nil
+}
 
+// doResetValue will execute resetValue with a retry mecanism (optimistic locking) until store.MaxRetry is reached.
+func (store *Store) doResetValue(rtx *libredis.Tx, key string) error {
+	for i := 0; i < store.MaxRetry; i++ {
+		err := resetValue(rtx, key)
+		if err == nil {
+			return nil
+		}
+	}
+	return errors.New("retry limit exceeded")
+}
+
+// resetValue will try to reset the counter identified by given key.
+func resetValue(rtx *libredis.Tx, key string) error {
+	deletion := rtx.Del(key)
+
+	_, err := deletion.Result()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ping checks if redis is alive.
@@ -257,4 +311,17 @@ func (store *Store) ping() (bool, error) {
 	}
 
 	return (pong == "PONG"), nil
+}
+
+// isExpirationRequired returns if we should set an expiration on a key, using (error) result from PTTL command.
+// The error code is -2 if the key does not exist, and -1 if the key exists.
+// Usually, it should be returned in nanosecond, but some users have reported that it could be in millisecond as well.
+// Better safe than sorry: we handle both.
+func isExpirationRequired(ttl time.Duration) bool {
+	switch ttl {
+	case -1 * time.Nanosecond, -1 * time.Millisecond:
+		return true
+	default:
+		return false
+	}
 }
